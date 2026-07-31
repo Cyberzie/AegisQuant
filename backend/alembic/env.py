@@ -6,7 +6,7 @@ from sqlalchemy import pool
 
 from app.core.config import settings
 from app.database.session import Base
-from app.models.user import User
+import app.models
 from app.models.instrument import Instrument
 from app.models.market_data import MarketData
 
