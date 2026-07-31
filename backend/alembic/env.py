@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.database.session import Base
 from app.models.user import User
 from app.models.instrument import Instrument
+from app.models.market_data import MarketData
 
 config = context.config
 
