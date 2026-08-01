@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from app.database.session import SessionLocal
 from app.models.instrument import Instrument
 from app.models.market_data import MarketData
@@ -9,7 +11,6 @@ from app.services.provider_ingestion import ingest_from_provider
 
 def test_provider_ingestion():
     db = SessionLocal()
-
     provider = MockMarketDataProvider()
 
     start = datetime(2026, 8, 4, 10, 0, 0)
@@ -38,13 +39,32 @@ def test_provider_ingestion():
         assert result.invalid == 0
 
     finally:
-        if "instrument" in locals() and instrument is not None:
+        if instrument is not None:
             db.query(MarketData).filter(
                 MarketData.instrument_id == instrument.id,
                 MarketData.timestamp >= start,
                 MarketData.timestamp <= end,
-            ).delete(synchronize_session=False)
+            ).delete(
+                synchronize_session=False
+            )
 
             db.commit()
 
         db.close()
+
+
+def test_provider_ingestion_unknown_symbol():
+    db = SessionLocal()
+    provider = MockMarketDataProvider()
+
+    try:
+        with pytest.raises(ValueError):
+            ingest_from_provider(
+                db=db,
+                provider=provider,
+                symbol="UNKNOWN",
+            )
+
+    finally:
+        db.close()
+        
