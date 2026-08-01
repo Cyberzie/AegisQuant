@@ -1,11 +1,20 @@
 from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database.dependencies import get_db
 from app.models.instrument import Instrument
 from app.models.market_data import MarketData
-from app.schemas.market_data import MarketDataCreate, MarketDataResponse
+from app.providers.factory import get_market_data_provider
+from app.schemas.market_data import (
+    MarketDataCreate,
+    MarketDataIngestionRequest,
+    MarketDataIngestionResponse,
+    MarketDataResponse,
+)
+from app.services.provider_ingestion import ingest_from_provider
+
 
 router = APIRouter(
     prefix="/market-data",
@@ -49,6 +58,7 @@ def create_market_data(
 
     return new_market_data
 
+
 @router.get(
     "/",
     response_model=list[MarketDataResponse],
@@ -58,7 +68,6 @@ def list_market_data(
     limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
-  
     return (
         db.query(MarketData)
         .order_by(MarketData.timestamp)
@@ -66,6 +75,7 @@ def list_market_data(
         .limit(limit)
         .all()
     )
+
 
 @router.get(
     "/instrument/{instrument_id}",
@@ -109,3 +119,37 @@ def list_market_data_by_instrument(
         .limit(limit)
         .all()
     )
+
+
+@router.post(
+    "/ingest",
+    response_model=MarketDataIngestionResponse,
+    status_code=status.HTTP_200_OK,
+)
+def ingest_market_data_from_provider(
+    request: MarketDataIngestionRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        provider = get_market_data_provider(request.provider)
+
+        result = ingest_from_provider(
+            db=db,
+            provider=provider,
+            symbol=request.symbol,
+            start=request.start,
+            end=request.end,
+        )
+
+        return MarketDataIngestionResponse(
+            received=result.received,
+            inserted=result.inserted,
+            duplicates=result.duplicates,
+            invalid=result.invalid,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc

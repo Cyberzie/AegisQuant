@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 
 class MarketDataCreate(BaseModel):
@@ -12,26 +12,6 @@ class MarketDataCreate(BaseModel):
     close: float
     volume: float | None = None
 
-    @model_validator(mode="after")
-    def validate_ohlc(self):
-        if self.high < self.low:
-            raise ValueError("High price cannot be lower than low price.")
-
-        if not self.low <= self.open <= self.high:
-            raise ValueError(
-                "Open price must be between low and high prices."
-            )
-
-        if not self.low <= self.close <= self.high:
-            raise ValueError(
-                "Close price must be between low and high prices."
-            )
-
-        if self.volume is not None and self.volume < 0:
-            raise ValueError("Volume cannot be negative.")
-
-        return self
-
 
 class MarketDataResponse(BaseModel):
     id: int
@@ -41,6 +21,20 @@ class MarketDataResponse(BaseModel):
     high: float
     low: float
     close: float
-    volume: float | None
+    volume: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class MarketDataIngestionRequest(BaseModel):
+    symbol: str
+    provider: str | None = None
+    start: datetime | None = None
+    end: datetime | None = None
+
+
+class MarketDataIngestionResponse(BaseModel):
+    received: int
+    inserted: int
+    duplicates: int
+    invalid: int
