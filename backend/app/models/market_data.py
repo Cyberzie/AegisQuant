@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index
+from sqlalchemy import DateTime, Float, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.session import Base
@@ -57,4 +57,10 @@ class MarketData(Base):
             "instrument_id",
             "timestamp",
         ),
+        UniqueConstraint(
+            "instrument_id",
+            "timestamp",
+            name="uq_market_data_instrument_timestamp",
+        ),
     )
+    
