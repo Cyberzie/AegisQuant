@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     SECRET_KEY: str
     LOG_LEVEL: str = "INFO"
+    MARKET_DATA_PROVIDER: str = "mock"
+    TWELVE_DATA_API_KEY: str = ""
+    TWELVE_DATA_BASE_URL: str = "https://api.twelvedata.com"
+    TWELVE_DATA_INTERVAL: str = "1day"
 
     model_config = SettingsConfigDict(
         env_file=".env",
