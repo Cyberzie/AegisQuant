@@ -52,7 +52,6 @@ def create_market_data(
 @router.get(
     "/",
     response_model=list[MarketDataResponse],
-
 )
 def list_market_data(
     skip: int = Query(0, ge=0),
@@ -76,6 +75,8 @@ def list_market_data_by_instrument(
     instrument_id: int,
     start: datetime | None = None,
     end: datetime | None = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
     instrument = (
@@ -104,5 +105,7 @@ def list_market_data_by_instrument(
     return (
         query
         .order_by(MarketData.timestamp)
+        .offset(skip)
+        .limit(limit)
         .all()
     )
