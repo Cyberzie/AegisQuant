@@ -19,13 +19,22 @@ from app.services.market_data_query import (
     get_market_data_by_symbol,
     get_market_data_summary,
 )
-from app.services.provider_ingestion import ingest_from_provider
 
+from app.schemas.technical_indicators import TechnicalIndicatorsResponse
+from app.services.technical_indicators import (
+    atr,
+    bollinger_bands,
+    ema,
+    macd,
+    rsi,
+    sma,
+)
+
+from app.services.provider_ingestion import ingest_from_provider
 
 router = APIRouter(
     prefix="/market-data",
 )
-
 
 @router.post(
     "/",
@@ -208,6 +217,68 @@ def market_data_summary(
             detail=str(exc),
         ) from exc
 
+@router.get(
+    "/indicators/{symbol}",
+    response_model=TechnicalIndicatorsResponse,
+)
+def market_data_indicators(
+    symbol: str,
+    db: Session = Depends(get_db),
+):
+    rows = get_market_data_by_symbol(
+        db=db,
+        symbol=symbol,
+        skip=0,
+        limit=1000,
+    )
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No market data found for instrument '{symbol}'.",
+        )
+
+    closes = [row.close for row in rows]
+    highs = [row.high for row in rows]
+    lows = [row.low for row in rows]
+
+    sma_values = sma(closes, 20)
+    ema_values = ema(closes, 20)
+    rsi_values = rsi(closes, 14)
+
+    macd_values = macd(closes)
+
+    bollinger_values = bollinger_bands(closes)
+
+    atr_values = atr(
+        highs,
+        lows,
+        closes,
+        14,
+    )
+
+    last_index = len(rows) - 1
+    latest_row = rows[last_index]
+
+    return TechnicalIndicatorsResponse(
+        symbol=symbol.upper(),
+        timestamp=latest_row.timestamp,
+        close=latest_row.close,
+
+        sma_20=sma_values[last_index],
+        ema_20=ema_values[last_index],
+        rsi_14=rsi_values[last_index],
+
+        macd=macd_values["macd"][last_index],
+        macd_signal=macd_values["signal"][last_index],
+        macd_histogram=macd_values["histogram"][last_index],
+
+        bollinger_middle=bollinger_values["middle"][last_index],
+        bollinger_upper=bollinger_values["upper"][last_index],
+        bollinger_lower=bollinger_values["lower"][last_index],
+
+        atr_14=atr_values[last_index],
+    )
 
 @router.post(
     "/ingest",
