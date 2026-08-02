@@ -13,6 +13,7 @@ from app.schemas.market_data import (
     MarketDataIngestionResponse,
     MarketDataResponse,
 )
+from app.services.market_data_query import get_market_data_by_symbol
 from app.services.provider_ingestion import ingest_from_provider
 
 
@@ -145,23 +146,13 @@ def list_market_data_by_symbol(
             detail=f"Instrument with symbol '{symbol}' not found.",
         )
 
-    query = (
-        db.query(MarketData)
-        .filter(MarketData.instrument_id == instrument.id)
-    )
-
-    if start is not None:
-        query = query.filter(MarketData.timestamp >= start)
-
-    if end is not None:
-        query = query.filter(MarketData.timestamp <= end)
-
-    return (
-        query
-        .order_by(MarketData.timestamp)
-        .offset(skip)
-        .limit(limit)
-        .all()
+    return get_market_data_by_symbol(
+        db=db,
+        symbol=symbol,
+        start=start,
+        end=end,
+        skip=skip,
+        limit=limit,
     )
 
 
