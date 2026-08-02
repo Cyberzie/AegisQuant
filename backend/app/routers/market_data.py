@@ -13,7 +13,10 @@ from app.schemas.market_data import (
     MarketDataIngestionResponse,
     MarketDataResponse,
 )
-from app.services.market_data_query import get_market_data_by_symbol
+from app.services.market_data_query import (
+    get_latest_market_data,
+    get_market_data_by_symbol,
+)
 from app.services.provider_ingestion import ingest_from_provider
 
 
@@ -154,6 +157,29 @@ def list_market_data_by_symbol(
         skip=skip,
         limit=limit,
     )
+
+
+@router.get(
+    "/latest/{symbol}",
+    response_model=list[MarketDataResponse],
+)
+def list_latest_market_data(
+    symbol: str,
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    try:
+        return get_latest_market_data(
+            db=db,
+            symbol=symbol,
+            limit=limit,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post(

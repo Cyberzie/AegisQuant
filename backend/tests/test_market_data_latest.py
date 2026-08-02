@@ -1,11 +1,16 @@
 from datetime import datetime
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.database.session import SessionLocal
+from app.main import app
 from app.models.instrument import Instrument
 from app.models.market_data import MarketData
 from app.services.market_data_query import get_latest_market_data
+
+
+client = TestClient(app)
 
 
 def get_aapl(db):
@@ -158,3 +163,90 @@ def test_get_latest_market_data_not_found():
 
     finally:
         db.close()
+
+
+def test_latest_market_data_api():
+    db = SessionLocal()
+    instrument = None
+
+    try:
+        instrument = get_aapl(db)
+
+        assert instrument is not None
+
+        create_test_rows(db, instrument.id)
+
+        response = client.get(
+            "/market-data/latest/AAPL",
+            params={"limit": 3},
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+
+        assert len(data) == 3
+        assert data[0]["timestamp"] == "2026-08-07T12:00:00"
+        assert data[1]["timestamp"] == "2026-08-07T11:00:00"
+        assert data[2]["timestamp"] == "2026-08-07T10:00:00"
+
+    finally:
+        if instrument is not None:
+            cleanup_test_rows(db, instrument.id)
+
+        db.close()
+
+
+def test_latest_market_data_api_case_insensitive():
+    db = SessionLocal()
+    instrument = None
+
+    try:
+        instrument = get_aapl(db)
+
+        assert instrument is not None
+
+        create_test_rows(db, instrument.id)
+
+        response = client.get(
+            "/market-data/latest/aapl",
+            params={"limit": 2},
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+
+        assert len(data) == 2
+        assert data[0]["timestamp"] == "2026-08-07T12:00:00"
+
+    finally:
+        if instrument is not None:
+            cleanup_test_rows(db, instrument.id)
+
+        db.close()
+
+
+def test_latest_market_data_api_not_found():
+    response = client.get(
+        "/market-data/latest/UNKNOWN",
+    )
+
+    assert response.status_code == 404
+    assert "Instrument with symbol" in response.json()["detail"]
+
+
+def test_latest_market_data_api_invalid_limit():
+    response = client.get(
+        "/market-data/latest/AAPL?limit=0",
+    )
+
+    assert response.status_code == 422
+
+
+def test_latest_market_data_api_limit_above_maximum():
+    response = client.get(
+        "/market-data/latest/AAPL?limit=1001",
+    )
+
+    assert response.status_code == 422
