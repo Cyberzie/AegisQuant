@@ -121,6 +121,50 @@ def list_market_data_by_instrument(
     )
 
 
+@router.get(
+    "/symbol/{symbol}",
+    response_model=list[MarketDataResponse],
+)
+def list_market_data_by_symbol(
+    symbol: str,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    instrument = (
+        db.query(Instrument)
+        .filter(Instrument.symbol == symbol.upper())
+        .first()
+    )
+
+    if instrument is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Instrument with symbol '{symbol}' not found.",
+        )
+
+    query = (
+        db.query(MarketData)
+        .filter(MarketData.instrument_id == instrument.id)
+    )
+
+    if start is not None:
+        query = query.filter(MarketData.timestamp >= start)
+
+    if end is not None:
+        query = query.filter(MarketData.timestamp <= end)
+
+    return (
+        query
+        .order_by(MarketData.timestamp)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+
 @router.post(
     "/ingest",
     response_model=MarketDataIngestionResponse,
