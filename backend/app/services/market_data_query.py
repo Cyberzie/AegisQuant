@@ -41,3 +41,28 @@ def get_market_data_by_symbol(
         .limit(limit)
         .all()
     )
+
+
+def get_latest_market_data(
+    db: Session,
+    symbol: str,
+    limit: int = 100,
+) -> list[MarketData]:
+    instrument = (
+        db.query(Instrument)
+        .filter(Instrument.symbol == symbol.upper())
+        .first()
+    )
+
+    if instrument is None:
+        raise ValueError(
+            f"Instrument with symbol '{symbol}' not found."
+        )
+
+    return (
+        db.query(MarketData)
+        .filter(MarketData.instrument_id == instrument.id)
+        .order_by(MarketData.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
