@@ -250,3 +250,126 @@ def test_get_instrument_invalid_id_type():
     response = client.get("/instruments/not-an-integer")
 
     assert response.status_code == 422
+def test_update_instrument():
+    symbol = unique_symbol()
+
+    try:
+        create_response = client.post(
+            "/instruments/",
+            json={
+                "symbol": symbol,
+                "name": "Original Instrument",
+                "asset_type": "stock",
+                "exchange": "TEST",
+                "currency": "USD",
+            },
+        )
+
+        assert create_response.status_code == 201
+
+        instrument_id = create_response.json()["id"]
+
+        response = client.patch(
+            f"/instruments/{instrument_id}",
+            json={
+                "name": "Updated Instrument",
+                "exchange": "NYSE",
+            },
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+
+        assert data["id"] == instrument_id
+        assert data["symbol"] == symbol
+        assert data["name"] == "Updated Instrument"
+        assert data["asset_type"] == "stock"
+        assert data["exchange"] == "NYSE"
+        assert data["currency"] == "USD"
+        assert data["is_active"] is True
+
+    finally:
+        cleanup_instrument(symbol)
+
+
+def test_update_instrument_active_status():
+    symbol = unique_symbol()
+
+    try:
+        create_response = client.post(
+            "/instruments/",
+            json={
+                "symbol": symbol,
+                "name": "Active Instrument",
+                "asset_type": "stock",
+            },
+        )
+
+        assert create_response.status_code == 201
+
+        instrument_id = create_response.json()["id"]
+
+        response = client.patch(
+            f"/instruments/{instrument_id}",
+            json={
+                "is_active": False,
+            },
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+
+        assert data["symbol"] == symbol
+        assert data["is_active"] is False
+
+    finally:
+        cleanup_instrument(symbol)
+
+
+def test_update_instrument_not_found():
+    response = client.patch(
+        "/instruments/999999999",
+        json={
+            "name": "Does Not Exist",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Instrument not found."
+
+
+def test_update_instrument_empty_body():
+    symbol = unique_symbol()
+
+    try:
+        create_response = client.post(
+            "/instruments/",
+            json={
+                "symbol": symbol,
+                "name": "Test Instrument",
+                "asset_type": "stock",
+            },
+        )
+
+        assert create_response.status_code == 201
+
+        instrument_id = create_response.json()["id"]
+
+        response = client.patch(
+            f"/instruments/{instrument_id}",
+            json={},
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+
+        assert data["symbol"] == symbol
+        assert data["name"] == "Test Instrument"
+        assert data["asset_type"] == "stock"
+
+    finally:
+        cleanup_instrument(symbol)
+

@@ -11,6 +11,14 @@ class InstrumentCreate(BaseModel):
     currency: str | None = None
 
 
+class InstrumentUpdate(BaseModel):
+    name: str | None = None
+    asset_type: str | None = None
+    exchange: str | None = None
+    currency: str | None = None
+    is_active: bool | None = None
+
+
 class InstrumentResponse(BaseModel):
     id: int
     symbol: str

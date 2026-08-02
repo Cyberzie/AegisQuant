@@ -3,12 +3,17 @@ from sqlalchemy.orm import Session
 
 from app.database.dependencies import get_db
 from app.models.instrument import Instrument
-from app.schemas.instrument import InstrumentCreate, InstrumentResponse
+from app.schemas.instrument import (
+    InstrumentCreate,
+    InstrumentResponse,
+    InstrumentUpdate,
+)
 
 
 router = APIRouter(
     prefix="/instruments",
 )
+
 
 @router.post(
     "/",
@@ -45,6 +50,7 @@ def create_instrument(
 
     return new_instrument
 
+
 @router.get(
     "/",
     response_model=list[InstrumentResponse],
@@ -57,6 +63,7 @@ def list_instruments(
         .order_by(Instrument.id)
         .all()
     )
+
 
 @router.get(
     "/{instrument_id}",
@@ -79,3 +86,37 @@ def get_instrument(
         )
 
     return instrument
+
+
+@router.patch(
+    "/{instrument_id}",
+    response_model=InstrumentResponse,
+)
+def update_instrument(
+    instrument_id: int,
+    instrument: InstrumentUpdate,
+    db: Session = Depends(get_db),
+):
+    existing_instrument = (
+        db.query(Instrument)
+        .filter(Instrument.id == instrument_id)
+        .first()
+    )
+
+    if existing_instrument is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Instrument not found.",
+        )
+
+    update_data = instrument.model_dump(
+        exclude_unset=True,
+    )
+
+    for field, value in update_data.items():
+        setattr(existing_instrument, field, value)
+
+    db.commit()
+    db.refresh(existing_instrument)
+
+    return existing_instrument
