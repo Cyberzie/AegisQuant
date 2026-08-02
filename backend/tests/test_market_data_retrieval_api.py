@@ -11,6 +11,14 @@ from app.models.market_data import MarketData
 client = TestClient(app)
 
 
+def get_aapl(db):
+    return (
+        db.query(Instrument)
+        .filter(Instrument.symbol == "AAPL")
+        .first()
+    )
+
+
 def create_test_rows(db, instrument_id):
     rows = [
         MarketData(
@@ -76,14 +84,6 @@ def cleanup_test_rows(db, instrument_id):
     )
 
     db.commit()
-
-
-def get_aapl(db):
-    return (
-        db.query(Instrument)
-        .filter(Instrument.symbol == "AAPL")
-        .first()
-    )
 
 
 def test_get_market_data_by_symbol():
@@ -157,9 +157,7 @@ def test_get_market_data_by_symbol_case_insensitive():
 
 
 def test_get_market_data_by_symbol_not_found():
-    response = client.get(
-        "/market-data/symbol/UNKNOWN",
-    )
+    response = client.get("/market-data/symbol/UNKNOWN")
 
     assert response.status_code == 404
 
@@ -297,6 +295,78 @@ def test_market_data_end_filter():
 
         assert len(data) == 3
         assert data[-1]["close"] == 109.0
+
+    finally:
+        if instrument is not None:
+            cleanup_test_rows(db, instrument.id)
+
+        db.close()
+
+
+def test_market_data_invalid_limit():
+    response = client.get(
+        "/market-data/symbol/AAPL?limit=0"
+    )
+
+    assert response.status_code == 422
+
+
+def test_market_data_limit_above_maximum():
+    response = client.get(
+        "/market-data/symbol/AAPL?limit=1001"
+    )
+
+    assert response.status_code == 422
+
+
+def test_market_data_negative_skip():
+    response = client.get(
+        "/market-data/symbol/AAPL?skip=-1"
+    )
+
+    assert response.status_code == 422
+
+
+def test_market_data_empty_result():
+    response = client.get(
+        "/market-data/symbol/AAPL"
+        "?start=2099-01-01T00:00:00"
+        "&end=2099-12-31T23:59:59"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_market_data_ordered_by_timestamp():
+    db = SessionLocal()
+    instrument = None
+
+    try:
+        instrument = get_aapl(db)
+
+        assert instrument is not None
+
+        create_test_rows(db, instrument.id)
+
+        response = client.get(
+            "/market-data/symbol/AAPL",
+            params={
+                "start": "2026-08-06T10:00:00",
+                "end": "2026-08-06T14:00:00",
+            },
+        )
+
+        assert response.status_code == 200
+
+        data = response.json()
+
+        timestamps = [
+            datetime.fromisoformat(row["timestamp"])
+            for row in data
+        ]
+
+        assert timestamps == sorted(timestamps)
 
     finally:
         if instrument is not None:
