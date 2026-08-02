@@ -12,10 +12,12 @@ from app.schemas.market_data import (
     MarketDataIngestionRequest,
     MarketDataIngestionResponse,
     MarketDataResponse,
+    MarketDataSummaryResponse,
 )
 from app.services.market_data_query import (
     get_latest_market_data,
     get_market_data_by_symbol,
+    get_market_data_summary,
 )
 from app.services.provider_ingestion import ingest_from_provider
 
@@ -173,6 +175,31 @@ def list_latest_market_data(
             db=db,
             symbol=symbol,
             limit=limit,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get(
+    "/summary/{symbol}",
+    response_model=MarketDataSummaryResponse,
+)
+def market_data_summary(
+    symbol: str,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        return get_market_data_summary(
+            db=db,
+            symbol=symbol,
+            start=start,
+            end=end,
         )
 
     except ValueError as exc:

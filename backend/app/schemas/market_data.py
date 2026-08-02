@@ -38,3 +38,15 @@ class MarketDataIngestionResponse(BaseModel):
     inserted: int
     duplicates: int
     invalid: int
+
+class MarketDataSummaryResponse(BaseModel):
+    symbol: str
+    data_points: int
+    first_timestamp: datetime
+    last_timestamp: datetime
+    first_open: float
+    latest_close: float
+    high: float
+    low: float
+    change: float
+    change_percent: float
