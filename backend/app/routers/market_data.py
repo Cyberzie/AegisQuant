@@ -8,6 +8,9 @@ from app.models.instrument import Instrument
 from app.models.market_data import MarketData
 from app.providers.factory import get_market_data_provider
 from app.schemas.backtest import BacktestResponse
+from app.schemas.baseline_evaluation import (
+    BaselineComparisonResponse,
+)
 from app.schemas.market_data import (
     MarketDataCreate,
     MarketDataIngestionRequest,
@@ -16,8 +19,13 @@ from app.schemas.market_data import (
     MarketDataSummaryResponse,
 )
 from app.schemas.ml_evaluation import MLEvaluationResponse
-from app.schemas.technical_indicators import TechnicalIndicatorsResponse
+from app.schemas.technical_indicators import (
+    TechnicalIndicatorsResponse,
+)
 from app.services.backtest_engine import backtest_market_data
+from app.services.baseline_evaluation import (
+    compare_walk_forward_baselines,
+)
 from app.services.market_data_query import (
     get_latest_market_data,
     get_market_data_by_symbol,
@@ -52,7 +60,10 @@ def create_market_data(
 ):
     instrument = (
         db.query(Instrument)
-        .filter(Instrument.id == market_data.instrument_id)
+        .filter(
+            Instrument.id
+            == market_data.instrument_id
+        )
         .first()
     )
 
@@ -85,7 +96,11 @@ def create_market_data(
 )
 def list_market_data(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(
+        100,
+        ge=1,
+        le=1000,
+    ),
     db: Session = Depends(get_db),
 ):
     return (
@@ -106,12 +121,18 @@ def list_market_data_by_instrument(
     start: datetime | None = None,
     end: datetime | None = None,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(
+        100,
+        ge=1,
+        le=1000,
+    ),
     db: Session = Depends(get_db),
 ):
     instrument = (
         db.query(Instrument)
-        .filter(Instrument.id == instrument_id)
+        .filter(
+            Instrument.id == instrument_id
+        )
         .first()
     )
 
@@ -123,14 +144,21 @@ def list_market_data_by_instrument(
 
     query = (
         db.query(MarketData)
-        .filter(MarketData.instrument_id == instrument_id)
+        .filter(
+            MarketData.instrument_id
+            == instrument_id
+        )
     )
 
     if start is not None:
-        query = query.filter(MarketData.timestamp >= start)
+        query = query.filter(
+            MarketData.timestamp >= start
+        )
 
     if end is not None:
-        query = query.filter(MarketData.timestamp <= end)
+        query = query.filter(
+            MarketData.timestamp <= end
+        )
 
     return (
         query
@@ -150,19 +178,28 @@ def list_market_data_by_symbol(
     start: datetime | None = None,
     end: datetime | None = None,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(
+        100,
+        ge=1,
+        le=1000,
+    ),
     db: Session = Depends(get_db),
 ):
     instrument = (
         db.query(Instrument)
-        .filter(Instrument.symbol == symbol.upper())
+        .filter(
+            Instrument.symbol == symbol.upper()
+        )
         .first()
     )
 
     if instrument is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Instrument with symbol '{symbol}' not found.",
+            detail=(
+                f"Instrument with symbol "
+                f"'{symbol}' not found."
+            ),
         )
 
     return get_market_data_by_symbol(
@@ -181,7 +218,11 @@ def list_market_data_by_symbol(
 )
 def list_latest_market_data(
     symbol: str,
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(
+        100,
+        ge=1,
+        le=1000,
+    ),
     db: Session = Depends(get_db),
 ):
     try:
@@ -241,20 +282,49 @@ def market_data_indicators(
     if not rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No market data found for instrument '{symbol}'.",
+            detail=(
+                f"No market data found for "
+                f"instrument '{symbol}'."
+            ),
         )
 
-    closes = [row.close for row in rows]
-    highs = [row.high for row in rows]
-    lows = [row.low for row in rows]
+    closes = [
+        row.close
+        for row in rows
+    ]
 
-    sma_values = sma(closes, 20)
-    ema_values = ema(closes, 20)
-    rsi_values = rsi(closes, 14)
+    highs = [
+        row.high
+        for row in rows
+    ]
 
-    macd_values = macd(closes)
+    lows = [
+        row.low
+        for row in rows
+    ]
 
-    bollinger_values = bollinger_bands(closes)
+    sma_values = sma(
+        closes,
+        20,
+    )
+
+    ema_values = ema(
+        closes,
+        20,
+    )
+
+    rsi_values = rsi(
+        closes,
+        14,
+    )
+
+    macd_values = macd(
+        closes,
+    )
+
+    bollinger_values = bollinger_bands(
+        closes,
+    )
 
     atr_values = atr(
         highs,
@@ -269,7 +339,9 @@ def market_data_indicators(
     signal_result = generate_signal(
         rsi_14=rsi_values[last_index],
         macd=macd_values["macd"][last_index],
-        macd_signal=macd_values["signal"][last_index],
+        macd_signal=(
+            macd_values["signal"][last_index]
+        ),
         sma_20=sma_values[last_index],
         ema_20=ema_values[last_index],
         close=latest_row.close,
@@ -285,11 +357,21 @@ def market_data_indicators(
         ema_20=ema_values[last_index],
         rsi_14=rsi_values[last_index],
         macd=macd_values["macd"][last_index],
-        macd_signal=macd_values["signal"][last_index],
-        macd_histogram=macd_values["histogram"][last_index],
-        bollinger_middle=bollinger_values["middle"][last_index],
-        bollinger_upper=bollinger_values["upper"][last_index],
-        bollinger_lower=bollinger_values["lower"][last_index],
+        macd_signal=(
+            macd_values["signal"][last_index]
+        ),
+        macd_histogram=(
+            macd_values["histogram"][last_index]
+        ),
+        bollinger_middle=(
+            bollinger_values["middle"][last_index]
+        ),
+        bollinger_upper=(
+            bollinger_values["upper"][last_index]
+        ),
+        bollinger_lower=(
+            bollinger_values["lower"][last_index]
+        ),
         atr_14=atr_values[last_index],
     )
 
@@ -300,7 +382,11 @@ def market_data_indicators(
 )
 def market_data_backtest(
     symbol: str,
-    horizon: int = Query(5, ge=1, le=100),
+    horizon: int = Query(
+        5,
+        ge=1,
+        le=100,
+    ),
     starting_capital: float = Query(
         1_000_000.0,
         gt=0,
@@ -336,11 +422,15 @@ def market_data_backtest(
             rows,
             symbol=symbol,
             horizon=horizon,
-            starting_capital=starting_capital,
+            starting_capital=(
+                starting_capital
+            ),
             transaction_cost_percent=(
                 transaction_cost_percent
             ),
-            slippage_percent=slippage_percent,
+            slippage_percent=(
+                slippage_percent
+            ),
         )
 
     except ValueError as exc:
@@ -363,10 +453,14 @@ def market_data_backtest(
         total_return_percent=(
             result.total_return_percent
         ),
-        starting_capital=result.starting_capital,
+        starting_capital=(
+            result.starting_capital
+        ),
         ending_capital=result.ending_capital,
         net_profit=result.net_profit,
-        net_return_percent=result.net_return_percent,
+        net_return_percent=(
+            result.net_return_percent
+        ),
         gross_profit=result.gross_profit,
         gross_loss=result.gross_loss,
         profit_factor=result.profit_factor,
@@ -392,7 +486,9 @@ def market_data_backtest(
                 "confidence": trade.confidence,
                 "entry_price": trade.entry_price,
                 "exit_price": trade.exit_price,
-                "return_percent": trade.return_percent,
+                "return_percent": (
+                    trade.return_percent
+                ),
                 "profitable": trade.profitable,
                 "position_return_percent": (
                     trade.position_return_percent
@@ -410,7 +506,11 @@ def market_data_backtest(
 )
 def market_data_ml_evaluation(
     symbol: str,
-    horizon: int = Query(5, ge=1, le=100),
+    horizon: int = Query(
+        5,
+        ge=1,
+        le=100,
+    ),
     validation_fraction: float = Query(
         0.20,
         gt=0,
@@ -439,7 +539,9 @@ def market_data_ml_evaluation(
             rows,
             symbol=symbol,
             horizon=horizon,
-            validation_fraction=validation_fraction,
+            validation_fraction=(
+                validation_fraction
+            ),
         )
 
     except ValueError as exc:
@@ -453,10 +555,384 @@ def market_data_ml_evaluation(
         dataset_rows=result.dataset_rows,
         training_rows=result.training_rows,
         validation_rows=result.validation_rows,
-        direction_accuracy=result.direction_accuracy,
+        direction_accuracy=(
+            result.direction_accuracy
+        ),
         average_absolute_error_percent=(
             result.average_absolute_error_percent
         ),
+    )
+
+
+@router.get(
+    "/backtest-analysis/{symbol}",
+)
+def market_data_backtest_analysis(
+    symbol: str,
+    horizon: int = Query(
+        5,
+        ge=1,
+        le=100,
+    ),
+    db: Session = Depends(get_db),
+):
+    from app.services.backtest_analysis import (
+        evaluate_backtest,
+    )
+
+    rows = get_market_data_by_symbol(
+        db=db,
+        symbol=symbol,
+        skip=0,
+        limit=1000,
+    )
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No market data found for "
+                f"instrument '{symbol}'."
+            ),
+        )
+
+    try:
+        result = backtest_market_data(
+            rows,
+            symbol=symbol,
+            horizon=horizon,
+        )
+
+        evaluation = evaluate_backtest(
+            result.trades
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "symbol": result.symbol,
+        "horizon": horizon,
+        "total_rows": result.total_rows,
+        "evaluated_rows": result.evaluated_rows,
+        "total_trades": evaluation.total_trades,
+        "confidence_buckets": [
+            {
+                "label": bucket.label,
+                "minimum_confidence": (
+                    bucket.minimum_confidence
+                ),
+                "maximum_confidence": (
+                    bucket.maximum_confidence
+                ),
+                "trade_count": bucket.trade_count,
+                "winning_trades": (
+                    bucket.winning_trades
+                ),
+                "losing_trades": (
+                    bucket.losing_trades
+                ),
+                "win_rate": bucket.win_rate,
+                "average_return_percent": (
+                    bucket.average_return_percent
+                ),
+                "total_return_percent": (
+                    bucket.total_return_percent
+                ),
+                "gross_profit_percent": (
+                    bucket.gross_profit_percent
+                ),
+                "gross_loss_percent": (
+                    bucket.gross_loss_percent
+                ),
+                "profit_factor": (
+                    bucket.profit_factor
+                ),
+            }
+            for bucket
+            in evaluation.confidence_buckets
+        ],
+        "high_confidence_win_rate": (
+            evaluation.high_confidence_win_rate
+        ),
+        "low_confidence_win_rate": (
+            evaluation.low_confidence_win_rate
+        ),
+        "high_confidence_average_return_percent": (
+            evaluation
+            .high_confidence_average_return_percent
+        ),
+        "low_confidence_average_return_percent": (
+            evaluation
+            .low_confidence_average_return_percent
+        ),
+    }
+
+
+@router.get(
+    "/ml-walk-forward/{symbol}",
+)
+def market_data_ml_walk_forward(
+    symbol: str,
+    horizon: int = Query(
+        5,
+        ge=1,
+        le=100,
+    ),
+    initial_training_fraction: float = Query(
+        0.60,
+        gt=0,
+        lt=1,
+    ),
+    folds: int = Query(
+        4,
+        ge=1,
+        le=20,
+    ),
+    gap_rows: int = Query(
+        5,
+        ge=0,
+        le=100,
+    ),
+    db: Session = Depends(get_db),
+):
+    from app.services.ml_validation import (
+        walk_forward_validate,
+    )
+
+    rows = get_market_data_by_symbol(
+        db=db,
+        symbol=symbol,
+        skip=0,
+        limit=1000,
+    )
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No market data found for "
+                f"instrument '{symbol}'."
+            ),
+        )
+
+    try:
+        from app.services.ml_dataset import (
+            build_ml_dataset,
+        )
+
+        dataset = build_ml_dataset(
+            rows,
+            horizon=horizon,
+        )
+
+        result = walk_forward_validate(
+            dataset,
+            initial_training_fraction=(
+                initial_training_fraction
+            ),
+            folds=folds,
+            gap_rows=gap_rows,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "symbol": symbol.upper(),
+        "horizon": horizon,
+        "dataset_rows": len(dataset.rows),
+        "total_training_rows": (
+            result.total_training_rows
+        ),
+        "total_validation_rows": (
+            result.total_validation_rows
+        ),
+        "total_correct_predictions": (
+            result.total_correct_predictions
+        ),
+        "total_incorrect_predictions": (
+            result.total_incorrect_predictions
+        ),
+        "direction_accuracy": (
+            result.direction_accuracy
+        ),
+        "average_absolute_error_percent": (
+            result.average_absolute_error_percent
+        ),
+        "folds": [
+            {
+                "fold_number": fold.fold_number,
+                "training_rows": (
+                    fold.training_rows
+                ),
+                "validation_rows": (
+                    fold.validation_rows
+                ),
+                "gap_rows": fold.gap_rows,
+                "correct_direction_predictions": (
+                    fold.correct_direction_predictions
+                ),
+                "incorrect_direction_predictions": (
+                    fold.incorrect_direction_predictions
+                ),
+                "direction_accuracy": (
+                    fold.direction_accuracy
+                ),
+                "average_absolute_error_percent": (
+                    fold.average_absolute_error_percent
+                ),
+            }
+            for fold in result.folds
+        ],
+    }
+
+
+@router.get(
+    "/baseline-comparison/{symbol}",
+    response_model=BaselineComparisonResponse,
+)
+def market_data_baseline_comparison(
+    symbol: str,
+    horizon: int = Query(
+        5,
+        ge=1,
+        le=100,
+    ),
+    initial_training_fraction: float = Query(
+        0.60,
+        gt=0,
+        lt=1,
+    ),
+    folds: int = Query(
+        4,
+        ge=1,
+        le=20,
+    ),
+    gap_rows: int | None = Query(
+        None,
+        ge=0,
+        le=100,
+    ),
+    validation_window: int | None = Query(
+        None,
+        ge=1,
+        le=1000,
+    ),
+    transaction_cost_percent: float = Query(
+        0.10,
+        ge=0,
+    ),
+    slippage_percent: float = Query(
+        0.05,
+        ge=0,
+    ),
+    db: Session = Depends(get_db),
+):
+    rows = get_market_data_by_symbol(
+        db=db,
+        symbol=symbol,
+        skip=0,
+        limit=1000,
+    )
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No market data found for "
+                f"instrument '{symbol}'."
+            ),
+        )
+
+    try:
+        result = compare_walk_forward_baselines(
+            rows,
+            symbol=symbol,
+            horizon=horizon,
+            initial_training_fraction=(
+                initial_training_fraction
+            ),
+            folds=folds,
+            gap_rows=gap_rows,
+            validation_window=(
+                validation_window
+            ),
+            transaction_cost_percent=(
+                transaction_cost_percent
+            ),
+            slippage_percent=(
+                slippage_percent
+            ),
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return BaselineComparisonResponse(
+        symbol=result.symbol,
+        horizon=result.horizon,
+        dataset_rows=result.dataset_rows,
+        total_training_rows=(
+            result.total_training_rows
+        ),
+        total_validation_rows=(
+            result.total_validation_rows
+        ),
+        folds=result.folds,
+        gap_rows=result.gap_rows,
+        strategies=[
+            {
+                "name": strategy.name,
+                "prediction_count": (
+                    strategy.prediction_count
+                ),
+                "actionable_predictions": (
+                    strategy.actionable_predictions
+                ),
+                "correct_direction_predictions": (
+                    strategy.correct_direction_predictions
+                ),
+                "incorrect_direction_predictions": (
+                    strategy.incorrect_direction_predictions
+                ),
+                "direction_accuracy": (
+                    strategy.direction_accuracy
+                ),
+                "average_return_percent": (
+                    strategy.average_return_percent
+                ),
+                "total_return_percent": (
+                    strategy.total_return_percent
+                ),
+                "average_net_return_percent": (
+                    strategy.average_net_return_percent
+                ),
+                "total_net_return_percent": (
+                    strategy.total_net_return_percent
+                ),
+                "winning_predictions": (
+                    strategy.winning_predictions
+                ),
+                "losing_predictions": (
+                    strategy.losing_predictions
+                ),
+                "win_rate": strategy.win_rate,
+                "profit_factor": (
+                    strategy.profit_factor
+                ),
+            }
+            for strategy in result.strategies
+        ],
     )
 
 
@@ -470,7 +946,9 @@ def ingest_market_data_from_provider(
     db: Session = Depends(get_db),
 ):
     try:
-        provider = get_market_data_provider(request.provider)
+        provider = get_market_data_provider(
+            request.provider
+        )
 
         result = ingest_from_provider(
             db=db,

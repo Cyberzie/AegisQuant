@@ -33,6 +33,7 @@ class BacktestEvaluation:
 
 
 _BUCKETS = (
+    ("0.00-0.49", 0.00, 0.50),
     ("0.50-0.59", 0.50, 0.60),
     ("0.60-0.69", 0.60, 0.70),
     ("0.70-0.79", 0.70, 0.80),
@@ -176,7 +177,7 @@ def evaluate_backtest(
     low_confidence_trades = [
         trade
         for trade in trades
-        if 0.50 <= trade.confidence < 0.70
+        if trade.confidence < 0.70
     ]
 
     high_confidence_trades = [

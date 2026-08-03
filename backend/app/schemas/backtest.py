@@ -47,3 +47,38 @@ class BacktestResponse(BaseModel):
     strategy_outperformance_percent: float
 
     trades: list[BacktestTradeResponse]
+
+
+class ConfidenceBucketResponse(BaseModel):
+    label: str
+    minimum_confidence: float
+    maximum_confidence: float
+
+    trade_count: int
+    winning_trades: int
+    losing_trades: int
+
+    win_rate: float
+    average_return_percent: float
+    total_return_percent: float
+
+    gross_profit_percent: float
+    gross_loss_percent: float
+    profit_factor: float
+
+
+class BacktestAnalysisResponse(BaseModel):
+    symbol: str
+    horizon: int
+
+    total_rows: int
+    evaluated_rows: int
+    total_trades: int
+
+    confidence_buckets: list[ConfidenceBucketResponse]
+
+    high_confidence_win_rate: float
+    low_confidence_win_rate: float
+
+    high_confidence_average_return_percent: float
+    low_confidence_average_return_percent: float
