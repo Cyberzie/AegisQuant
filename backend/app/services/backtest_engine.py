@@ -4,11 +4,22 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from app.models.market_data import MarketData
+from app.services.adaptive_ensemble import AdaptiveEnsembleState
 from app.services.ensemble_signal import combine_signals
 from app.services.feature_engineering import build_market_features
-from app.services.ml_dataset import build_ml_dataset
-from app.services.ml_model import predict_ml_model, train_ml_model
-from app.services.signal_engine import generate_signal
+from app.services.ml_dataset import (
+    MLDatasetRow,
+    build_ml_dataset,
+)
+from app.services.ml_model import (
+    MLPrediction,
+    predict_ml_model,
+    train_ml_model,
+)
+from app.services.signal_engine import (
+    SignalResult,
+    generate_signal,
+)
 from app.services.technical_indicators import (
     ema,
     macd,
@@ -63,9 +74,21 @@ class BacktestResult:
     trades: tuple[BacktestTrade, ...]
 
 
-def _calculate_rule_signal(
+MINIMUM_HISTORY = 26
+MINIMUM_ML_ROWS = 20
+
+DEFAULT_LEARNING_RATE = 0.01
+DEFAULT_EPOCHS = 500
+
+RULE_WEIGHT = 0.45
+ML_WEIGHT = 0.55
+
+MINIMUM_ACTIONABLE_CONFIDENCE = 0.55
+
+
+def _calculate_rule_result(
     closes: list[float],
-) -> tuple[str, float]:
+) -> SignalResult:
     sma_values = sma(closes, 20)
     ema_values = ema(closes, 20)
     rsi_values = rsi(closes, 14)
@@ -73,18 +96,13 @@ def _calculate_rule_signal(
 
     index = len(closes) - 1
 
-    signal_result = generate_signal(
+    return generate_signal(
         rsi_14=rsi_values[index],
         macd=macd_values["macd"][index],
         macd_signal=macd_values["signal"][index],
         sma_20=sma_values[index],
         ema_20=ema_values[index],
         close=closes[index],
-    )
-
-    return (
-        signal_result.signal,
-        signal_result.confidence,
     )
 
 
@@ -98,48 +116,23 @@ def _train_ml_model_for_history(
         horizon=horizon,
     )
 
-    if len(dataset.rows) < 10:
+    if len(dataset.rows) < MINIMUM_ML_ROWS:
         return None
 
     return train_ml_model(
         dataset,
-        learning_rate=0.01,
-        epochs=500,
+        learning_rate=DEFAULT_LEARNING_RATE,
+        epochs=DEFAULT_EPOCHS,
     )
 
 
-def _calculate_ensemble_signal(
+def _build_prediction_row(
     rows: Sequence[MarketData],
-    *,
-    horizon: int,
-):
-    closes = [
-        float(row.close)
-        for row in rows
-    ]
-
-    rule_signal, rule_confidence = (
-        _calculate_rule_signal(closes)
-    )
-
-    rule_result = generate_signal(
-        rsi_14=rsi(closes, 14)[-1],
-        macd=macd(closes)["macd"][-1],
-        macd_signal=macd(closes)["signal"][-1],
-        sma_20=sma(closes, 20)[-1],
-        ema_20=ema(closes, 20)[-1],
-        close=closes[-1],
-    )
-
-    ml_model = _train_ml_model_for_history(
-        rows,
-        horizon=horizon,
-    )
-
-    if ml_model is None:
-        return rule_result.signal, rule_result.confidence
-
+) -> MLDatasetRow | None:
     features = build_market_features(rows)
+
+    if not features:
+        return None
 
     latest_feature = features[-1]
 
@@ -165,13 +158,9 @@ def _calculate_ensemble_signal(
         value is None
         for value in feature_values.values()
     ):
-        return rule_signal, rule_confidence
+        return None
 
-    from app.services.ml_dataset import (
-        MLDatasetRow,
-    )
-
-    prediction_row = MLDatasetRow(
+    return MLDatasetRow(
         timestamp=latest_feature.timestamp,
         features={
             name: float(value)
@@ -181,21 +170,161 @@ def _calculate_ensemble_signal(
         target_direction="HOLD",
     )
 
-    ml_prediction = predict_ml_model(
-        ml_model,
+
+def _calculate_ml_prediction(
+    rows: Sequence[MarketData],
+    *,
+    horizon: int,
+) -> MLPrediction | None:
+    model = _train_ml_model_for_history(
+        rows,
+        horizon=horizon,
+    )
+
+    if model is None:
+        return None
+
+    prediction_row = _build_prediction_row(rows)
+
+    if prediction_row is None:
+        return None
+
+    return predict_ml_model(
+        model,
         prediction_row,
     )
+
+
+def _calculate_ensemble_signal(
+    rows: Sequence[MarketData],
+    *,
+    horizon: int,
+    adaptive_state: AdaptiveEnsembleState,
+) -> tuple[str, float, str, str]:
+
+    closes = [
+        float(row.close)
+        for row in rows
+    ]
+
+    rule_result = _calculate_rule_result(
+        closes
+    )
+
+    ml_prediction = _calculate_ml_prediction(
+        rows,
+        horizon=horizon,
+    )
+
+    if ml_prediction is None:
+        return (
+            rule_result.signal,
+            rule_result.confidence,
+            rule_result.signal,
+            "HOLD",
+        )
+
+    adaptive_weights = adaptive_state.weights()
 
     ensemble = combine_signals(
         rule_result,
         ml_prediction,
-        rule_weight=0.4,
-        ml_weight=0.6,
+        adaptive_weights=adaptive_weights,
     )
 
     return (
         ensemble.signal,
         ensemble.confidence,
+        ensemble.rule_signal,
+        ensemble.ml_signal,
+    )
+
+
+def _calculate_position_return(
+    signal: str,
+    entry_price: float,
+    exit_price: float,
+    *,
+    transaction_cost_percent: float,
+    slippage_percent: float,
+) -> float:
+
+    if signal == "BUY":
+        raw_return = (
+            exit_price - entry_price
+        ) / entry_price
+
+    elif signal == "SELL":
+        raw_return = (
+            entry_price - exit_price
+        ) / entry_price
+
+    else:
+        return 0.0
+
+    transaction_cost = (
+        2.0
+        * transaction_cost_percent
+        / 100.0
+    )
+
+    slippage_cost = (
+        2.0
+        * slippage_percent
+        / 100.0
+    )
+
+    total_cost = (
+        transaction_cost
+        + slippage_cost
+    )
+
+    return raw_return - total_cost
+
+
+def _calculate_drawdown(
+    equity: float,
+    peak_equity: float,
+) -> float:
+
+    if peak_equity <= 0:
+        return 0.0
+
+    return (
+        (peak_equity - equity)
+        / peak_equity
+    ) * 100.0
+
+
+def _empty_result(
+    *,
+    symbol: str,
+    starting_capital: float,
+) -> BacktestResult:
+
+    return BacktestResult(
+        symbol=symbol.upper(),
+        total_rows=0,
+        evaluated_rows=0,
+        actionable_trades=0,
+        winning_trades=0,
+        losing_trades=0,
+        win_rate=0.0,
+        average_return_percent=0.0,
+        total_return_percent=0.0,
+        starting_capital=starting_capital,
+        ending_capital=starting_capital,
+        net_profit=0.0,
+        net_return_percent=0.0,
+        gross_profit=0.0,
+        gross_loss=0.0,
+        profit_factor=0.0,
+        average_winning_trade_percent=0.0,
+        average_losing_trade_percent=0.0,
+        maximum_drawdown_percent=0.0,
+        buy_and_hold_return_percent=0.0,
+        strategy_outperformance_percent=0.0,
+        trades=(),
     )
 
 
@@ -237,9 +366,15 @@ def backtest_market_data(
     total_rows = len(ordered_rows)
 
     if total_rows == 0:
+        return _empty_result(
+            symbol=symbol,
+            starting_capital=starting_capital,
+        )
+
+    if total_rows < MINIMUM_HISTORY:
         return BacktestResult(
             symbol=symbol.upper(),
-            total_rows=0,
+            total_rows=total_rows,
             evaluated_rows=0,
             actionable_trades=0,
             winning_trades=0,
@@ -262,7 +397,15 @@ def backtest_market_data(
             trades=(),
         )
 
-    minimum_history = 26
+    adaptive_state = AdaptiveEnsembleState(
+        window=50,
+        base_rule_weight=RULE_WEIGHT,
+        base_ml_weight=ML_WEIGHT,
+        minimum_weight=0.20,
+        maximum_weight=0.80,
+        minimum_observations=5,
+        recency_decay=0.97,
+    )
 
     trades: list[BacktestTrade] = []
 
@@ -272,7 +415,7 @@ def backtest_market_data(
 
     evaluated_rows = 0
 
-    index = minimum_history - 1
+    index = MINIMUM_HISTORY - 1
 
     while index < total_rows - 1:
 
@@ -282,68 +425,125 @@ def backtest_market_data(
             : signal_index + 1
         ]
 
-        signal, confidence = (
-            _calculate_ensemble_signal(
-                historical_rows,
-                horizon=horizon,
-            )
+        (
+            signal,
+            confidence,
+            rule_signal,
+            ml_signal,
+        ) = _calculate_ensemble_signal(
+            historical_rows,
+            horizon=horizon,
+            adaptive_state=adaptive_state,
         )
 
         evaluated_rows += 1
 
-        if signal == "HOLD":
+        # Update adaptive performance only after the future outcome
+        # becomes available. This keeps the weighting walk-forward safe.
+        outcome_index = (
+            signal_index + horizon
+        )
+
+        if outcome_index < total_rows:
+
+            signal_price = float(
+                ordered_rows[
+                    signal_index
+                ].close
+            )
+
+            outcome_price = float(
+                ordered_rows[
+                    outcome_index
+                ].close
+            )
+
+            if (
+                signal_price > 0
+                and outcome_price > 0
+            ):
+
+                future_return_percent = (
+                    (
+                        outcome_price
+                        - signal_price
+                    )
+                    / signal_price
+                ) * 100.0
+
+                if future_return_percent > 0:
+                    actual_direction = "BUY"
+
+                elif future_return_percent < 0:
+                    actual_direction = "SELL"
+
+                else:
+                    actual_direction = "HOLD"
+
+                adaptive_state.observe(
+                    rule_signal=rule_signal,
+                    ml_signal=ml_signal,
+                    actual_direction=(
+                        actual_direction
+                    ),
+                    realized_return_percent=(
+                        future_return_percent
+                    ),
+                )
+
+        # Do not enter weak or ambiguous signals.
+        if (
+            signal not in {"BUY", "SELL"}
+            or confidence
+            < MINIMUM_ACTIONABLE_CONFIDENCE
+        ):
             index += 1
             continue
 
+        # Enter on the bar immediately after the
+        # signal bar. This prevents look-ahead bias.
         entry_index = signal_index + 1
-        exit_index = entry_index + horizon
+
+        # Position remains open for exactly `horizon`
+        # bars after entry.
+        exit_index = (
+            entry_index + horizon
+        )
 
         if exit_index >= total_rows:
             break
 
         entry_price = float(
-            ordered_rows[entry_index].close
+            ordered_rows[
+                entry_index
+            ].close
         )
 
         exit_price = float(
-            ordered_rows[exit_index].close
+            ordered_rows[
+                exit_index
+            ].close
         )
 
-        if entry_price <= 0 or exit_price <= 0:
+        if (
+            entry_price <= 0
+            or exit_price <= 0
+        ):
             index += 1
             continue
 
-        if signal == "BUY":
-            raw_position_return = (
-                (exit_price - entry_price)
-                / entry_price
-            )
-        else:
-            raw_position_return = (
-                (entry_price - exit_price)
-                / entry_price
-            )
-
-        transaction_cost = (
-            2.0
-            * transaction_cost_percent
-            / 100.0
-        )
-
-        slippage_cost = (
-            2.0
-            * slippage_percent
-            / 100.0
-        )
-
-        total_cost = (
-            transaction_cost
-            + slippage_cost
-        )
-
         net_position_return = (
-            raw_position_return
-            - total_cost
+            _calculate_position_return(
+                signal,
+                entry_price,
+                exit_price,
+                transaction_cost_percent=(
+                    transaction_cost_percent
+                ),
+                slippage_percent=(
+                    slippage_percent
+                ),
+            )
         )
 
         return_percent = (
@@ -362,16 +562,17 @@ def backtest_market_data(
         if equity > peak_equity:
             peak_equity = equity
 
-        if peak_equity > 0:
-            drawdown_percent = (
-                (peak_equity - equity)
-                / peak_equity
-            ) * 100.0
-
-            maximum_drawdown_percent = max(
-                maximum_drawdown_percent,
-                drawdown_percent,
+        drawdown_percent = (
+            _calculate_drawdown(
+                equity,
+                peak_equity,
             )
+        )
+
+        maximum_drawdown_percent = max(
+            maximum_drawdown_percent,
+            drawdown_percent,
+        )
 
         trades.append(
             BacktestTrade(
@@ -391,6 +592,7 @@ def backtest_market_data(
             )
         )
 
+        # Never permit overlapping positions.
         index = exit_index + 1
 
     actionable_trades = len(trades)
@@ -407,6 +609,7 @@ def backtest_market_data(
     )
 
     if actionable_trades:
+
         win_rate = (
             winning_trades
             / actionable_trades
@@ -420,12 +623,16 @@ def backtest_market_data(
             / actionable_trades
         )
 
-        total_return_percent = sum(
-            trade.return_percent
-            for trade in trades
-        )
+        total_return_percent = (
+            (
+                equity
+                / starting_capital
+            )
+            - 1.0
+        ) * 100.0
 
     else:
+
         win_rate = 0.0
         average_return_percent = 0.0
         total_return_percent = 0.0
@@ -433,9 +640,12 @@ def backtest_market_data(
     gross_profit = 0.0
     gross_loss = 0.0
 
-    previous_equity = starting_capital
+    previous_equity = (
+        starting_capital
+    )
 
     for trade in trades:
+
         change = (
             trade.equity_after
             - previous_equity
@@ -443,19 +653,27 @@ def backtest_market_data(
 
         if change > 0:
             gross_profit += change
+
         elif change < 0:
             gross_loss += abs(change)
 
-        previous_equity = trade.equity_after
+        previous_equity = (
+            trade.equity_after
+        )
 
     if gross_loss > 0:
+
         profit_factor = (
             gross_profit
             / gross_loss
         )
+
     elif gross_profit > 0:
+
         profit_factor = float("inf")
+
     else:
+
         profit_factor = 0.0
 
     winning_returns = [
@@ -505,11 +723,17 @@ def backtest_market_data(
     )
 
     if first_close > 0:
+
         buy_and_hold_return_percent = (
-            (last_close - first_close)
+            (
+                last_close
+                - first_close
+            )
             / first_close
         ) * 100.0
+
     else:
+
         buy_and_hold_return_percent = 0.0
 
     strategy_outperformance_percent = (
@@ -525,12 +749,18 @@ def backtest_market_data(
         winning_trades=winning_trades,
         losing_trades=losing_trades,
         win_rate=win_rate,
-        average_return_percent=average_return_percent,
-        total_return_percent=total_return_percent,
+        average_return_percent=(
+            average_return_percent
+        ),
+        total_return_percent=(
+            total_return_percent
+        ),
         starting_capital=starting_capital,
         ending_capital=ending_capital,
         net_profit=net_profit,
-        net_return_percent=net_return_percent,
+        net_return_percent=(
+            net_return_percent
+        ),
         gross_profit=gross_profit,
         gross_loss=gross_loss,
         profit_factor=profit_factor,
