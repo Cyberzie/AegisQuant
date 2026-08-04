@@ -22,6 +22,11 @@ from app.schemas.ml_evaluation import MLEvaluationResponse
 from app.schemas.technical_indicators import (
     TechnicalIndicatorsResponse,
 )
+
+from app.schemas.trading_decision import (
+    TradingDecisionResponse,
+)
+
 from app.services.backtest_engine import backtest_market_data
 from app.services.baseline_evaluation import (
     compare_walk_forward_baselines,
@@ -43,11 +48,39 @@ from app.services.technical_indicators import (
     sma,
 )
 
+from app.services.risk_management import (
+    RiskParameters,
+)
+from app.services.trading_decision import (
+    build_trading_decision,
+)
+
+from app.services.ensemble_signal import (
+    combine_signals,
+)
+from app.services.ml_model import (
+    predict_ml_model,
+)
+from app.services.ml_dataset import (
+    MLDataset,
+    build_ml_dataset,
+)
+
+from app.services.baseline_evaluation import (
+    _build_adaptive_ensemble_state,
+    _feature_row_for_prediction,
+    _rule_signal_from_features,
+    _train_fold_model,
+)
+
+from app.services.ml_dataset import (
+    MLDataset,
+    build_ml_dataset,
+)
 
 router = APIRouter(
     prefix="/market-data",
 )
-
 
 @router.post(
     "/",
@@ -116,6 +149,7 @@ def list_market_data(
     "/instrument/{instrument_id}",
     response_model=list[MarketDataResponse],
 )
+
 def list_market_data_by_instrument(
     instrument_id: int,
     start: datetime | None = None,
@@ -173,6 +207,7 @@ def list_market_data_by_instrument(
     "/symbol/{symbol}",
     response_model=list[MarketDataResponse],
 )
+
 def list_market_data_by_symbol(
     symbol: str,
     start: datetime | None = None,
@@ -211,7 +246,6 @@ def list_market_data_by_symbol(
         limit=limit,
     )
 
-
 @router.get(
     "/latest/{symbol}",
     response_model=list[MarketDataResponse],
@@ -237,7 +271,6 @@ def list_latest_market_data(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
-
 
 @router.get(
     "/summary/{symbol}",
@@ -935,6 +968,170 @@ def market_data_baseline_comparison(
         ],
     )
 
+@router.get(
+    "/trading-decision/{symbol}",
+    response_model=TradingDecisionResponse,
+)
+
+def market_data_trading_decision(
+    symbol: str,
+    capital: float = Query(
+        1_000_000.0,
+        gt=0,
+    ),
+    minimum_confidence: float = Query(
+        0.55,
+        ge=0,
+        le=1,
+    ),
+    risk_per_trade_percent: float = Query(
+        1.0,
+        gt=0,
+    ),
+    stop_loss_percent: float = Query(
+        2.0,
+        gt=0,
+    ),
+    take_profit_percent: float = Query(
+        4.0,
+        ge=0,
+    ),
+    maximum_position_percent: float = Query(
+        25.0,
+        gt=0,
+        le=100,
+    ),
+    db: Session = Depends(get_db),
+):
+    rows = get_market_data_by_symbol(
+        db=db,
+        symbol=symbol,
+        skip=0,
+        limit=1000,
+    )
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No market data found for "
+                f"instrument '{symbol}'."
+            ),
+        )
+
+    latest_row = rows[-1]
+
+    try:
+        dataset = build_ml_dataset(
+            rows,
+            horizon=5,
+        )
+
+        if len(dataset.rows) < 20:
+            raise ValueError(
+                "Not enough market data for "
+                "trading decision."
+            )
+
+        latest_dataset_row = dataset.rows[-1]
+
+        training_dataset = MLDataset(
+            rows=tuple(dataset.rows[:-1]),
+            feature_names=dataset.feature_names,
+        )
+
+        if len(training_dataset.rows) < 20:
+            raise ValueError(
+                "Not enough historical data "
+                "to train the trading decision model."
+            )
+
+        model = _train_fold_model(
+            training_dataset
+        )
+
+        rule_result = _rule_signal_from_features(
+            latest_dataset_row
+        )
+
+        ml_prediction = predict_ml_model(
+            model,
+            _feature_row_for_prediction(
+                latest_dataset_row
+            ),
+        )
+
+        adaptive_state = (
+            _build_adaptive_ensemble_state()
+        )
+
+        adaptive_weights = (
+            adaptive_state.weights()
+        )
+
+        ensemble_result = combine_signals(
+            rule_result,
+            ml_prediction,
+            adaptive_weights=adaptive_weights,
+        )
+
+        risk_parameters = RiskParameters(
+            risk_per_trade_percent=(
+                risk_per_trade_percent
+            ),
+            stop_loss_percent=(
+                stop_loss_percent
+            ),
+            take_profit_percent=(
+                take_profit_percent
+            ),
+            maximum_position_percent=(
+                maximum_position_percent
+            ),
+            minimum_confidence=(
+                minimum_confidence
+            ),
+        )
+
+        decision = build_trading_decision(
+            ensemble_result,
+            entry_price=latest_row.close,
+            capital=capital,
+            risk_parameters=risk_parameters,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return TradingDecisionResponse(
+        symbol=symbol.upper(),
+        timestamp=latest_row.timestamp,
+        close=latest_row.close,
+        signal=decision.signal,
+        confidence=decision.confidence,
+        expected_return_percent=(
+            decision.expected_return_percent
+        ),
+        rule_weight=decision.rule_weight,
+        ml_weight=decision.ml_weight,
+        risk={
+            "approved": decision.risk.approved,
+            "reason": decision.risk.reason,
+            "risk_amount": decision.risk.risk_amount,
+            "position_size": decision.risk.position_size,
+            "position_value": decision.risk.position_value,
+            "position_percent": decision.risk.position_percent,
+            "stop_loss_price": (
+                decision.risk.stop_loss_price
+            ),
+            "take_profit_price": (
+                decision.risk.take_profit_price
+            ),
+        },
+    )
 
 @router.post(
     "/ingest",
