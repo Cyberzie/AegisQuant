@@ -329,6 +329,73 @@ def _build_adaptive_ensemble_state() -> (
         recency_decay=0.97,
     )
 
+def build_latest_ensemble_signal(
+    rows: Sequence[MarketData],
+    *,
+    horizon: int = 5,
+):
+    """
+    Build the latest trading ensemble from historical market data.
+
+    The model is trained only on historical rows preceding the
+    latest prediction row, preventing the latest observation from
+    leaking into model training.
+    """
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: row.timestamp,
+    )
+
+    dataset = build_ml_dataset(
+        ordered_rows,
+        horizon=horizon,
+    )
+
+    if len(dataset.rows) < 20:
+        raise ValueError(
+            "Not enough market data to build "
+            "the latest trading decision."
+        )
+
+    prediction_row = dataset.rows[-1]
+
+    training_dataset = MLDataset(
+        rows=tuple(dataset.rows[:-1]),
+        feature_names=dataset.feature_names,
+    )
+
+    if len(training_dataset.rows) < 20:
+        raise ValueError(
+            "Not enough historical data to train "
+            "the trading model."
+        )
+
+    model = _train_fold_model(
+        training_dataset
+    )
+
+    rule_result = _rule_signal_from_features(
+        prediction_row
+    )
+
+    ml_prediction = predict_ml_model(
+        model,
+        _feature_row_for_prediction(
+            prediction_row
+        ),
+    )
+
+    adaptive_state = (
+        _build_adaptive_ensemble_state()
+    )
+
+    return combine_signals(
+        rule_result,
+        ml_prediction,
+        adaptive_weights=(
+            adaptive_state.weights()
+        ),
+    )
 
 def compare_walk_forward_baselines(
     rows: Sequence[MarketData],

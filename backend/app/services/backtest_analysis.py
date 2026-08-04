@@ -118,12 +118,9 @@ def _calculate_bucket(
     )
 
     if gross_loss_percent > 0:
-        profit_factor = (
-            gross_profit_percent
-            / gross_loss_percent
-        )
+        profit_factor = gross_profit_percent / gross_loss_percent
     elif gross_profit_percent > 0:
-        profit_factor = float("inf")
+        profit_factor = None
     else:
         profit_factor = 0.0
 

@@ -11,11 +11,17 @@ from app.services.paper_trading import PaperTradingEngine
 from app.services.portfolio import Portfolio
 from app.services.risk_management import RiskParameters
 
+from app.database.dependencies import get_db
+from app.services.market_data_query import (
+    get_market_data_by_symbol,
+)
+from app.services.baseline_evaluation import (
+    build_latest_ensemble_signal,
+)
 
 router = APIRouter(
     prefix="/paper-trading",
 )
-
 
 _portfolio = Portfolio(
     starting_capital=1_000_000.0
